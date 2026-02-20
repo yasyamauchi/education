@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MediaPipe 重心トラッキング</title>
+  
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      background-color: #222;
+      color: white;
+      font-family: sans-serif;
+    }
+    h2 {
+      margin: 10px 0;
+      font-size: 1.2rem;
+    }
+    .container {
+      position: relative;
+      width: 100%;
+      max-width: 640px;
+    }
+    /* カメラの生映像は非表示にし、Canvasに映像と描画を統合する */
+    video {
+      display: none;
+    }
+    canvas {
+      width: 100%;
+      height: auto;
+      background-color: #000;
+      border-radius: 8px;
+    }
+    #status {
+      margin-top: 10px;
+      color: #00ff00;
+    }
+  </style>
+</head>
+<body>
+
+  <h2>人体重心オーバーレイ</h2>
+  <div class="container">
+    <video id="input_video" autoplay playsinline></video>
+    <canvas id="output_canvas" width="640" height="480"></canvas>
+  </div>
+  <div id="status">モデルを読み込み中... カメラの許可をお願いします。</div>
+
+  <script>
+    const videoElement = document.getElementById('input_video');
+    const canvasElement = document.getElementById('output_canvas');
+    const canvasCtx = canvasElement.getContext('2d');
+    const statusText = document.getElementById('status');
+
+    // MediaPipe Poseの初期化
+    const pose = new Pose({locateFile: (file) => {
+      return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
+    }});
+
+    pose.setOptions({
+      modelComplexity: 1, // 0:軽量, 1:標準, 2:高精度（スマホなら0か1推奨）
+      smoothLandmarks: true,
+      enableSegmentation: false,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5
+    });
+
+    // 推論結果が得られたときのコールバック処理
+    pose.onResults(onResults);
+
+    function onResults(results) {
+      statusText.innerText = "トラッキング中...";
+
+      // Canvasをクリアしてカメラ映像を描画
+      canvasCtx.save();
+      canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+      canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+      if (results.poseLandmarks) {
+        // オプション: 姿勢の骨格を描画（不要な場合はコメントアウトしてください）
+        drawConnectors(canvasCtx, results.poseLandmarks, POSE_CONNECTIONS,
+                       {color: 'rgba(0, 255, 0, 0.5)', lineWidth: 2});
+        drawLandmarks(canvasCtx, results.poseLandmarks,
+                      {color: 'rgba(255, 0, 0, 0.5)', lineWidth: 1, radius: 2});
+
+        // 重心の計算（左右の腰の中点）
+        // 左腰: 23, 右腰: 24
+        const leftHip = results.poseLandmarks[23];
+        const rightHip = results.poseLandmarks[24];
+
+        // ランドマークの座標は0.0〜1.0の正規化座標なので、Canvasのサイズを掛けてピクセル座標に変換
+        const cogX = ((leftHip.x + rightHip.x) / 2) * canvasElement.width;
+        const cogY = ((leftHip.y + rightHip.y) / 2) * canvasElement.height;
+
+        // 重心位置に目立つマーカー（青い円）を描画
+        canvasCtx.beginPath();
+        canvasCtx.arc(cogX, cogY, 12, 0, 2 * Math.PI);
+        canvasCtx.fillStyle = '#0088ff';
+        canvasCtx.fill();
+        canvasCtx.lineWidth = 3;
+        canvasCtx.strokeStyle = '#ffffff';
+        canvasCtx.stroke();
+        
+        // 「COG」というテキストを添える
+        canvasCtx.fillStyle = '#ffffff';
+        canvasCtx.font = '16px sans-serif';
+        canvasCtx.fillText('COG', cogX + 18, cogY + 5);
+      }
+      canvasCtx.restore();
+    }
+
+    // カメラのセットアップ
+    const camera = new Camera(videoElement, {
+      onFrame: async () => {
+        await pose.send({image: videoElement});
+      },
+      width: 640,
+      height: 480,
+      facingMode: "user" // スマホのインカメラ。アウトカメラにしたい場合は "environment" に変更
+    });
+
+    camera.start()
+      .then(() => {
+        console.log("カメラが正常に起動しました");
+      })
+      .catch((err) => {
+        console.error("カメラの起動に失敗しました:", err);
+        statusText.innerText = "エラー: カメラにアクセスできません。";
+        statusText.style.color = "red";
+      });
+  </script>
+</body>
+</html>
